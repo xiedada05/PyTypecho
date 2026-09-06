@@ -31,7 +31,8 @@ class Content:
     tags should be split by ',' like 'tag1, tag2'
     dateCreated can be datetime.datetime.
     allow_feed has no effect because Typecho not use
-    status could be 'publish' or 'save' or 'private'.
+    post_status could be 'publish', 'draft', 'private', 'pending' or 'waiting';
+    leave it empty to let the publish argument decide.
     """
 
     title: str
@@ -41,7 +42,7 @@ class Content:
     mt_text_more: str = ""
     wp_password: str = ""
     mt_keywords: str = ""
-    dateCreated: datetime = datetime.now()
+    dateCreated: datetime = field(default_factory=datetime.now)
     mt_allow_comments: int = 1
     mt_allow_pings: int = 1
     post_status: str = ""

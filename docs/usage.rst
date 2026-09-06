@@ -210,6 +210,12 @@ You should create a Category instance at first.
 >>> te.new_category(category)
 2
 
+Returns the category id (mid) as int on every supported Typecho version. If a
+category with the same name already exists (Typecho >= 1.2.1 reports
+duplicates as an opaque fault), the id of the existing category is returned.
+Note that Typecho 1.2.0 has a server-side bug in wp.newCategory and cannot be
+fixed client-side; upgrade to 1.2.1 or later (typecho PR #1443).
+
 Delete Category
 ```````````````````````````
 A category id(mid) is required.

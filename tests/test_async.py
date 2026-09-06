@@ -1,11 +1,14 @@
 import os
 import unittest
+import uuid
 
 from pytypecho import AsyncTypecho, Post, Page, Category, Comment, Attachment
 
 
 class AsyncTypechoTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        if not os.environ.get("XMLRPC_URL"):
+            self.skipTest("XMLRPC_URL not set; live tests skipped")
         self.te = AsyncTypecho(
             rpc_url=os.environ.get("XMLRPC_URL"),
             username=os.environ.get("XMLRPC_USER_NAME"),
@@ -43,6 +46,16 @@ class AsyncTypechoPostTestCase(AsyncTypechoTestCase):
         num = await self.te.new_post(post, publish=True)
         r = await self.te.del_post(int(num))
         self.assertIsNotNone(r)
+
+    async def test_new_post_draft(self):
+        title = "Draft Post Title %s" % uuid.uuid4().hex[:8]
+        num = await self.te.new_post(Post(title=title, description="D"), publish=False)
+        self.assertIs(type(num), int)
+        posts = await self.te.get_posts(30) or []
+        draft = next((p for p in posts if p.get("title") == title), None)
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.get("post_status"), "draft")
+        await self.te.del_post(int(num))
 
 
 class AsyncTypechoPageTestCase(AsyncTypechoTestCase):
@@ -83,9 +96,28 @@ class AsyncTypechoCategoryTestCase(AsyncTypechoTestCase):
         self.assertIsNotNone(r)
         self.assertEqual(r[0]["categoryName"], "默认分类")
 
+    async def test_new_category(self):
+        name = "New Category %s" % uuid.uuid4().hex[:8]
+        r = await self.te.new_category(Category(name=name))
+        self.assertIs(type(r), int)
+        names = {c["categoryName"] for c in (await self.te.get_categories() or [])}
+        self.assertIn(name, names)
+        await self.te.del_category(r)
+
+    async def test_new_category_duplicate(self):
+        # On Typecho >= 1.2.1 duplicates raise an opaque fault 404; the client
+        # falls back to the existing category (get-or-create).
+        name = "Dup Category %s" % uuid.uuid4().hex[:8]
+        first = await self.te.new_category(Category(name=name))
+        second = await self.te.new_category(Category(name=name))
+        self.assertIs(type(first), int)
+        self.assertEqual(first, second)
+        await self.te.del_category(first)
+
     async def test_del_category(self):
-        r = await self.te.del_category(2)
-        self.assertIsNotNone(r)
+        name = "Del Category %s" % uuid.uuid4().hex[:8]
+        r = await self.te.new_category(Category(name=name))
+        self.assertIsNotNone(await self.te.del_category(r))
 
 
 class AsyncTypechoTagTestCase(AsyncTypechoTestCase):

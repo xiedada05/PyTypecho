@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="pytypecho",
-    version="2.1.0",
+    version="2.2.0",
     author="Veoco",
     author_email="one@nomox.cn",
     description="Python Typecho Client (XMLRPC)",

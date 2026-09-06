@@ -41,22 +41,27 @@ asyncio.run(main())
 ### Documents
 [ReadTheDocs](https://pytypecho.readthedocs.io/en/latest/)
 
+An MCP server for this client lives separately at
+[xiedada05/pytypecho-mcp](https://github.com/xiedada05/pytypecho-mcp).
+
 ## Status
 
 ### Functions
 - [x] Post
-  - [x] get Post/Posts
-  - [x] new Post (Not fully tested!)
+  - [x] get Post/Posts (getPost is broken server-side on Typecho 1.3.0)
+  - [x] new Post (missing categories are created automatically)
   - [x] edit Post
   - [x] delete Post
 - [x] Page
-  - [x] get Page/Pages
-  - [x] new Page (Not fully tested!)
+  - [x] get Page/Pages (getPage is broken server-side on Typecho 1.3.0)
+  - [x] new Page
   - [x] edit Page
   - [x] delete Page
 - [x] Category
   - [x] get Categories
-  - [x] new Category (Not work on typecho >= 1.2)
+  - [x] new Category (works on Typecho < 1.2, 1.2.1+ and 1.3; Typecho 1.2.0 is
+    broken server-side and cannot be fixed client-side. If a category with the
+    same name already exists, the id of the existing category is returned)
   - [x] delete Category
 - [x] Tag
   - [x] get Tags

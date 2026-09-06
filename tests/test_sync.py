@@ -1,11 +1,14 @@
 import os
 import unittest
+import uuid
 
 from pytypecho import Typecho, Post, Page, Category, Comment, Attachment
 
 
 class TypechoTestCase(unittest.TestCase):
     def setUp(self):
+        if not os.environ.get("XMLRPC_URL"):
+            self.skipTest("XMLRPC_URL not set; live tests skipped")
         self.te = Typecho(
             rpc_url=os.environ.get("XMLRPC_URL"),
             username=os.environ.get("XMLRPC_USER_NAME"),
@@ -44,6 +47,16 @@ class TypechoPostTestCase(TypechoTestCase):
         num = self.te.new_post(post, publish=True)
         r = self.te.del_post(int(num))
         self.assertIsNotNone(r)
+
+    def test_new_post_draft(self):
+        title = "Draft Post Title %s" % uuid.uuid4().hex[:8]
+        num = self.te.new_post(Post(title=title, description="D"), publish=False)
+        self.assertIs(type(num), int)
+        posts = self.te.get_posts(30) or []
+        draft = next((p for p in posts if p.get("title") == title), None)
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.get("post_status"), "draft")
+        self.te.del_post(int(num))
 
 
 class TypechoPageTestCase(TypechoTestCase):
@@ -84,9 +97,28 @@ class TypechoCategoryTestCase(TypechoTestCase):
         self.assertIsNotNone(r)
         self.assertEqual(r[0]["categoryName"], "默认分类")
 
+    def test_new_category(self):
+        name = "New Category %s" % uuid.uuid4().hex[:8]
+        r = self.te.new_category(Category(name=name))
+        self.assertIs(type(r), int)
+        names = {c["categoryName"] for c in (self.te.get_categories() or [])}
+        self.assertIn(name, names)
+        self.te.del_category(r)
+
+    def test_new_category_duplicate(self):
+        # On Typecho >= 1.2.1 duplicates raise an opaque fault 404; the client
+        # falls back to the existing category (get-or-create).
+        name = "Dup Category %s" % uuid.uuid4().hex[:8]
+        first = self.te.new_category(Category(name=name))
+        second = self.te.new_category(Category(name=name))
+        self.assertIs(type(first), int)
+        self.assertEqual(first, second)
+        self.te.del_category(first)
+
     def test_del_category(self):
-        r = self.te.del_category(2)
-        self.assertIsNotNone(r)
+        name = "Del Category %s" % uuid.uuid4().hex[:8]
+        r = self.te.new_category(Category(name=name))
+        self.assertIsNotNone(self.te.del_category(r))
 
 
 class TypechoTagTestCase(TypechoTestCase):

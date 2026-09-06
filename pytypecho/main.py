@@ -1,10 +1,71 @@
-from xmlrpc.client import ServerProxy, Fault
-from typing import List, Dict, Optional
+from xmlrpc.client import Binary, ServerProxy, Fault
+from typing import Any, List, Dict, Optional
 from dataclasses import asdict
 
 from .log import logger
 from .models import Post, Page, Category, Attachment, Comment
 from .aio import AsyncServerProxy
+
+
+def _to_int(value: Any) -> Optional[int]:
+    """
+    Typecho returns the new id as int (>= 1.2.1) or str (< 1.2), normalize it.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _find_category_id(categories: Any, name: str) -> Optional[int]:
+    for cat in categories or ():
+        if isinstance(cat, dict) and cat.get("categoryName") == name:
+            category_id = _to_int(cat.get("categoryId"))
+            if category_id is not None:
+                return category_id
+    return None
+
+
+def _resolve_existing_category(categories: Any, name: str) -> Optional[int]:
+    existing = _find_category_id(categories, name)
+    if existing is not None:
+        logger.warning(
+            "Category '%s' was not created (already exists?), "
+            "returning existing id %s",
+            name,
+            existing,
+        )
+    else:
+        logger.error(
+            "Failed to create category '%s'. If your server is Typecho 1.2.0, "
+            "wp.newCategory is broken server-side (upgrade to >= 1.2.1, see "
+            "typecho PR #1443); otherwise check the name/slug for conflicts.",
+            name,
+        )
+    return existing
+
+
+def _content_struct(content: Any, **extra: Any) -> dict:
+    """
+    Drop an empty post_status: Typecho maps it back to 'publish', which would
+    override publish=False. An explicit post_status still wins over publish.
+    """
+    d = asdict(content)
+    if d.get("post_status") == "":
+        del d["post_status"]
+    d.update(extra)
+    return d
+
+
+def _page_struct(page: Any, **extra: Any) -> dict:
+    """
+    Pages read their status from the 'page_status' key server-side; the
+    dataclass only has post_status, so rename it.
+    """
+    d = _content_struct(page, **extra)
+    if d.get("post_status"):
+        d["page_status"] = d.pop("post_status")
+    return d
 
 
 class TypechoPostMixin:
@@ -18,15 +79,16 @@ class TypechoPostMixin:
 
     def new_post(self, post: Post, publish: bool) -> Optional[int]:
         """
-        Post's status will cover publish, and if you only save post, the post id will only be '0'
-        If Post's categories are not created, it will only create the first category
+        An explicit post_status ('draft'/'pending'/'private') takes precedence
+        over publish. Missing categories are created automatically by Typecho.
+        Returns the new post id, or None on failure.
         """
-        return self.try_rpc(self.s.metaWeblog.newPost, post, publish)
+        return self.try_rpc(self.s.metaWeblog.newPost, _content_struct(post), publish)
 
     def edit_post(self, post: Post, post_id: int, publish: bool) -> Optional[int]:
-        d = asdict(post)
-        d.update({"postId": post_id})
-        return self.try_rpc(self.s.metaWeblog.newPost, d, publish)
+        return self.try_rpc(
+            self.s.metaWeblog.newPost, _content_struct(post, postId=post_id), publish
+        )
 
     def del_post(self, post_id: int) -> Optional[bool]:
         return self._try_rpc(
@@ -53,25 +115,40 @@ class TypechoPageMixin:
 
     def new_page(self, page: Page, publish: bool) -> Optional[int]:
         """
-        Page's status will cover publish, and if you only save post, the post id will only be '0'
+        An explicit page status ('draft'/'private') takes precedence over
+        publish. Returns the new page id, or None on failure.
         """
-        return self.try_rpc(self.s.metaWeblog.newPost, page, publish)
+        return self.try_rpc(self.s.metaWeblog.newPost, _page_struct(page), publish)
 
     def edit_page(self, page: Page, page_id: int, publish: bool) -> Optional[int]:
-        d = asdict(page)
-        d.update({"postId": page_id})
-        return self.try_rpc(self.s.metaWeblog.newPost, d, publish)
+        return self.try_rpc(
+            self.s.metaWeblog.newPost, _page_struct(page, postId=page_id), publish
+        )
 
     def del_page(self, page_id: int) -> Optional[bool]:
         return self.try_rpc(self.s.wp.deletePage, page_id)
 
 
 class TypechoCategoryMixin:
-    def get_categories(self) -> Optional[Dict]:
+    def get_categories(self) -> Optional[List[Dict]]:
         return self.try_rpc(self.s.metaWeblog.getCategories)
 
     def new_category(self, category: Category) -> Optional[int]:
-        return self.try_rpc(self.s.wp.newCategory, category)
+        """
+        Create a category and return its id (int, on every Typecho version).
+
+        Typecho < 1.2 returns the id as str, >= 1.2.1 as int; both are
+        normalized here. If creation is rejected (Typecho >= 1.2.1 reports
+        duplicate names etc. as an opaque fault 404), fall back to returning
+        the id of an existing category with the same name (get-or-create).
+        """
+        category_id = _to_int(self.try_rpc(self.s.wp.newCategory, category))
+        if category_id is not None:
+            return category_id
+
+        return _resolve_existing_category(
+            self.try_rpc(self.s.metaWeblog.getCategories), category.name
+        )
 
     def del_category(self, category_id: int) -> Optional[bool]:
         return self.try_rpc(self.s.wp.deleteCategory, category_id)
@@ -105,7 +182,10 @@ class TypechoAttachmentMixin:
         return self.try_rpc(self.s.wp.getMediaItem, attachment_id)
 
     def new_attachment(self, data: Attachment) -> Optional[Dict]:
-        return self.try_rpc(self.s.wp.uploadFile, data)
+        # built by hand: asdict() deep-copies, which cannot pickle the open
+        # file object, and a raw file object does not survive marshaling
+        payload = {"name": data.name, "bytes": Binary(data.bytes.read())}
+        return self.try_rpc(self.s.wp.uploadFile, payload)
 
 
 class TypechoCommentMixin:
@@ -182,8 +262,7 @@ class Typecho(
             logger.error("Error {}: {}".format(e.faultCode, e.faultString))
         except Exception as e:
             logger.error("Error {}".format(e))
-        finally:
-            return res
+        return res
 
 
 class AsyncTypecho(Typecho):
@@ -212,5 +291,14 @@ class AsyncTypecho(Typecho):
             logger.error("Error {}: {}".format(e.faultCode, e.faultString))
         except Exception as e:
             logger.error("Error {}".format(e))
-        finally:
-            return res
+        return res
+
+    async def new_category(self, category: Category) -> Optional[int]:
+        """Async counterpart of TypechoCategoryMixin.new_category."""
+        category_id = _to_int(await self.try_rpc(self.s.wp.newCategory, category))
+        if category_id is not None:
+            return category_id
+
+        return _resolve_existing_category(
+            await self.try_rpc(self.s.metaWeblog.getCategories), category.name
+        )
